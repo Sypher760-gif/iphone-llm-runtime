@@ -1,0 +1,9 @@
+LLMBench.xcodeproj/
+Frameworks/
+build/
+dl/
+Payload/
+*.ipa
+*.log
+.DS_Store
+xcuserdata/

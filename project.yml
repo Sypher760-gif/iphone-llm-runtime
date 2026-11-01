@@ -1,0 +1,37 @@
+name: LLMBench
+options:
+  bundleIdPrefix: io.github.sypher760gif
+  deploymentTarget:
+    iOS: "17.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1"
+    ENABLE_USER_SCRIPT_SANDBOXING: NO
+targets:
+  LLMBench:
+    type: application
+    platform: iOS
+    sources:
+      - LLMBench
+    dependencies:
+      - framework: Frameworks/llama.xcframework
+        embed: true
+    info:
+      path: LLMBench/Info.plist
+      properties:
+        CFBundleDisplayName: LLMBench
+        UILaunchScreen: {}
+        UIFileSharingEnabled: true
+        LSSupportsOpeningDocumentsInPlace: true
+        UISupportedInterfaceOrientations:
+          - UIInterfaceOrientationPortrait
+        UIRequiredDeviceCapabilities:
+          - arm64
+          - metal
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.sypher760gif.llmbench
+        GENERATE_INFOPLIST_FILE: NO

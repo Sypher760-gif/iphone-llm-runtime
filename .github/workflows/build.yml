@@ -1,0 +1,98 @@
+name: build-ipa
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  LLAMA_TAG: b12024
+  LLAMA_ZIP_SHA256: B7005AD25DAB07D273794AFC7AC24D55AEAC1B52376301907C5FB4762E42545D
+
+jobs:
+  build:
+    runs-on: macos-26
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select newest Xcode
+        run: |
+          ls -d /Applications/Xcode*.app
+          NEWEST=$(ls -d /Applications/Xcode_[0-9]*.app 2>/dev/null | grep -v -i beta | sort -V | tail -1)
+          if [ -z "$NEWEST" ]; then NEWEST=$(ls -d /Applications/Xcode*.app | sort -V | tail -1); fi
+          echo "Using $NEWEST"
+          sudo xcode-select -s "$NEWEST/Contents/Developer"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -i ios
+
+      - name: Metal toolchain
+        run: |
+          xcrun -sdk iphoneos metal --version || true
+          xcodebuild -downloadComponent MetalToolchain || true
+          xcrun -sdk iphoneos metal --version
+
+      - name: Fetch llama.cpp xcframework (pinned release)
+        run: |
+          mkdir -p Frameworks dl
+          curl -fL -o dl/llama.zip "https://github.com/ggml-org/llama.cpp/releases/download/${LLAMA_TAG}/llama-${LLAMA_TAG}-xcframework.zip"
+          echo "${LLAMA_ZIP_SHA256}  dl/llama.zip" | tr 'A-F' 'a-f' | shasum -a 256 -c -
+          unzip -q dl/llama.zip -d dl/x
+          cp -R dl/x/build-apple/llama.xcframework Frameworks/
+          ls Frameworks/llama.xcframework
+
+      - name: Generate Xcode project
+        run: |
+          brew install xcodegen
+          xcodegen generate
+
+      - name: Build (unsigned, device SDK)
+        run: |
+          set -o pipefail
+          xcodebuild -project LLMBench.xcodeproj -scheme LLMBench -configuration Release \
+            -sdk iphoneos -destination 'generic/platform=iOS' -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+            build 2>&1 | tee build.log | tail -n 60
+
+      - name: Package unsigned .ipa
+        run: |
+          APP=build/Build/Products/Release-iphoneos/LLMBench.app
+          mkdir -p Payload
+          cp -R "$APP" Payload/
+          zip -qry LLMBench-unsigned.ipa Payload
+          ls -l LLMBench-unsigned.ipa
+
+      - name: Check .ipa contents
+        run: |
+          unzip -l LLMBench-unsigned.ipa | grep -E "Payload/LLMBench.app/(LLMBench|default.metallib|Info.plist)$|llama.framework/llama$"
+          unzip -tq LLMBench-unsigned.ipa
+          APP=Payload/LLMBench.app
+          test -d "$APP"
+          echo "--- lipo"
+          lipo -info "$APP/LLMBench"
+          file "$APP/LLMBench"
+          echo "--- metal library"
+          ls -l "$APP/default.metallib"
+          echo "--- embedded framework"
+          lipo -info "$APP/Frameworks/llama.framework/llama"
+          echo "--- min OS and file sharing keys"
+          plutil -p "$APP/Info.plist" | grep -E "MinimumOSVersion|UIFileSharingEnabled|LSSupportsOpeningDocumentsInPlace|CFBundleIdentifier"
+          echo "--- signature (expected: none)"
+          codesign -dv "$APP" 2>&1 | head -3 || true
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LLMBench-unsigned-ipa
+          path: LLMBench-unsigned.ipa
+
+      - name: Publish Release (rolling "latest")
+        run: |
+          gh release delete latest --cleanup-tag -y || true
+          gh release create latest LLMBench-unsigned.ipa \
+            --title "LLMBench unsigned .ipa (build ${GITHUB_RUN_NUMBER}, ${GITHUB_SHA::7})" \
+            --notes "Unsigned .ipa built by CI from ${GITHUB_SHA}. Sign it with Sideloadly. See README.md. llama.cpp ${LLAMA_TAG}."
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
